@@ -1,6 +1,9 @@
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Runs;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace DeckSwap.DeckSwapCode;
 
@@ -41,18 +44,23 @@ public class DeckRotatorPatch
             var players = CapturedRunState.Players;
             if (players.Count < 2) return;
 
-            // Snapshot each player's serialized state
-            var serializedPlayers = players.Select(p => p.ToSerializable()).ToList();
+            // Snapshot each player's deck cards as a list
+            var decks = players
+                .Select(p => p.Deck.Cards.ToList())
+                .ToList();
 
-            // Extract just the decks
-            var decks = serializedPlayers.Select(sp => sp.Deck).ToList();
-
-            // Rotate: P1 gets P2's deck, P2 gets P3's, P3 gets P1's
+            // Rotate: P1 gets P2's cards, P2 gets P3's, P3 gets P1's
             for (int i = 0; i < players.Count; i++)
             {
                 int sourceIndex = (i + 1) % players.Count;
-                serializedPlayers[i].Deck = decks[sourceIndex];
-                players[i].SyncWithSerializedPlayer(serializedPlayers[i]);
+                var targetDeck = players[i].Deck;
+
+                // Clear the player's current deck silently
+                targetDeck.Clear(silent: true);
+
+                // Add the source player's cards directly
+                foreach (var card in decks[sourceIndex])
+                    targetDeck.AddInternal(card, silent: true);
             }
 
             MainFile.Logger.Info($"DeckSwap: rotated decks for {players.Count} players");
