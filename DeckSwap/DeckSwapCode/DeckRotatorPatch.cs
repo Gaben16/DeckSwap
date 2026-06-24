@@ -44,23 +44,28 @@ public class DeckRotatorPatch
             var players = CapturedRunState.Players;
             if (players.Count < 2) return;
 
-            // Snapshot each player's deck cards as a list
-            var decks = players
-                .Select(p => p.Deck.Cards.ToList())
+            // Snapshot each player's deck as serialized cards
+            var serializedDecks = players
+                .Select(p => p.Deck.Cards
+                    .Select(c => c.ToSerializable())
+                    .ToList())
                 .ToList();
 
             // Rotate: P1 gets P2's cards, P2 gets P3's, P3 gets P1's
             for (int i = 0; i < players.Count; i++)
             {
                 int sourceIndex = (i + 1) % players.Count;
-                var targetDeck = players[i].Deck;
+                var player = players[i];
 
-                // Clear the player's current deck silently
-                targetDeck.Clear(silent: true);
+                // Clear current deck silently
+                player.Deck.Clear(silent: true);
 
-                // Add the source player's cards directly
-                foreach (var card in decks[sourceIndex])
-                    targetDeck.AddInternal(card, silent: true);
+                // Deserialize cards fresh for this specific player
+                foreach (var serializedCard in serializedDecks[sourceIndex])
+                {
+                    var card = CapturedRunState.LoadCard(serializedCard, player);
+                    player.Deck.AddInternal(card, silent: true);
+                }
             }
 
             MainFile.Logger.Info($"DeckSwap: rotated decks for {players.Count} players");
