@@ -1,6 +1,8 @@
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Runs;
+using System.Linq;
 
 namespace DeckSwap.DeckSwapCode;
 
@@ -8,7 +10,6 @@ public class DeckRotatorPatch
 {
     public static RunState? CapturedRunState { get; set; }
 
-    // Capture the RunState when a run starts
     [HarmonyPatch(typeof(RunManager), nameof(RunManager.Launch))]
     public class RunStateCapturer
     {
@@ -19,7 +20,6 @@ public class DeckRotatorPatch
         }
     }
 
-    // Clear the RunState when a run ends
     [HarmonyPatch(typeof(RunManager), nameof(RunManager.CleanUp))]
     public class RunStateCleanup
     {
@@ -30,7 +30,6 @@ public class DeckRotatorPatch
         }
     }
 
-    // Rotate decks just before each room's combat sync
     [HarmonyPatch(typeof(CombatStateSynchronizer), nameof(CombatStateSynchronizer.StartSync))]
     public class DeckRotator
     {
@@ -41,21 +40,41 @@ public class DeckRotatorPatch
             var players = CapturedRunState.Players;
             if (players.Count < 2) return;
 
-            // Snapshot each player's serialized state
-            var serializedPlayers = players.Select(p => p.ToSerializable()).ToList();
+            // Sort by NetId so every client agrees on the same rotation order
+            // regardless of what order the local player list is in
+            var sortedPlayers = players.OrderBy(p => p.NetId).ToList();
 
-            // Extract just the decks
-            var decks = serializedPlayers.Select(sp => sp.Deck).ToList();
+            MainFile.Logger.Info($"DeckSwap: sorted player order: {string.Join(", ", sortedPlayers.Select(p => p.NetId))}");
 
-            // Rotate: P1 gets P2's deck, P2 gets P3's, P3 gets P1's
-            for (int i = 0; i < players.Count; i++)
+            // Snapshot ALL decks in sorted order before any changes
+            var serializedDecks = sortedPlayers
+                .Select(p => p.Deck.Cards
+                    .Select(c => c.ToSerializable())
+                    .ToList())
+                .ToList();
+
+            // Find the local player's index in the sorted list
+            // and swap only their deck
+            for (int i = 0; i < sortedPlayers.Count; i++)
             {
-                int sourceIndex = (i + 1) % players.Count;
-                serializedPlayers[i].Deck = decks[sourceIndex];
-                players[i].SyncWithSerializedPlayer(serializedPlayers[i]);
-            }
+                if (!LocalContext.IsMe(sortedPlayers[i])) continue;
 
-            MainFile.Logger.Info($"DeckSwap: rotated decks for {players.Count} players");
+                int sourceIndex = (i + 1) % sortedPlayers.Count;
+                var localPlayer = sortedPlayers[i];
+
+                MainFile.Logger.Info($"DeckSwap: local player index={i}, taking deck from index={sourceIndex} (NetId={sortedPlayers[sourceIndex].NetId})");
+
+                localPlayer.Deck.Clear(silent: true);
+
+                foreach (var serializedCard in serializedDecks[sourceIndex])
+                {
+                    var card = CapturedRunState.LoadCard(serializedCard, localPlayer);
+                    localPlayer.Deck.AddInternal(card, silent: true);
+                }
+
+                MainFile.Logger.Info($"DeckSwap: swapped local player {localPlayer.NetId} deck successfully");
+                break;
+            }
         }
     }
 }
